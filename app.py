@@ -9,8 +9,7 @@ st.set_page_config(page_title="Analizador BAGA", page_icon="⚽", layout="center
 st.title("⚽ Analizador BAGA")
 st.subheader("Picks de Alta Efectividad (@1.50 - @1.70)")
 
-# 1. Obtención de API Key desde Secrets o entrada manual
-api_key = str(st.secrets.get("ODDS_API_KEY", "")).strip()
+api_key = "d81fcbebbfec4f1be8074f82375dd0b7"
 
 if not api_key:
     api_key = st.text_input("Ingresa tu Odds API Key:", type="password").strip()
