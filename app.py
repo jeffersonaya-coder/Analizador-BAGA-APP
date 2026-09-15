@@ -8,9 +8,8 @@ st.set_page_config(page_title="Analizador BAGA", page_icon="⚽", layout="center
 st.title("⚽ Analizador BAGA")
 st.subheader("Picks de Alta Efectividad (@1.50 - @1.70)")
 
-# 1. Obtener clave de Secrets o Input
-raw_key = st.secrets.get("ODDS_API_KEY", "")
-api_key = str(raw_key).strip().strip('"').strip("'")
+# 1. Obtener clave de Secrets o Input de manera limpia
+api_key = st.secrets.get("ODDS_API_KEY", "").strip()
 
 if not api_key:
     api_key = st.text_input("Ingresa tu Odds API Key:", type="password").strip()
@@ -21,9 +20,8 @@ if st.button("🚀 OBTENER PICKS DEL DÍA"):
     else:
         with st.spinner("Consultando partidos..."):
             try:
-                # Consulta con params dict para evitar errores de encoding en la URL
-                url = "https://api.the-odds-api.com/v4/sports/soccer_brazil_campeonato/odds/"
-                params = {
+                # Consulta a todo el fútbol mundial
+                url = "https://api.the-odds-api.com/v4/sports/soccer/odds/"
                     'apiKey': api_key,
                     'regions': 'eu',
                     'markets': 'h2h',
