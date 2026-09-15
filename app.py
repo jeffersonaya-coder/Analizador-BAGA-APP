@@ -11,7 +11,7 @@ st.subheader("Picks de Alta Efectividad (@1.50 - @1.70)")
 
 # 1. Autenticación con API Key desde Secrets o manual
 # Carga desde Secrets o muestra el cuadro para ponerla a mano
-api_key_secret = st.secrets.get("ODDS_API_KEY", "")
+api_key_secret = st.secrets.get("ODDS_API_KEY", "d81fcbebbfec4f1be8074f82375dd0b7")
 api_key_input = st.text_input("Ingresa tu Odds API Key:", value=api_key_secret, type="password")
 api_key = api_key_input if api_key_input else api_key_secret
 if st.button("🚀 OBTENER PICKS DEL DÍA"):
