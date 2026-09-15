@@ -9,8 +9,11 @@ st.set_page_config(page_title="Analizador BAGA", page_icon="⚽", layout="center
 st.title("⚽ Analizador BAGA")
 st.subheader("Picks de Alta Efectividad (@1.50 - @1.70)")
 
-# Entrada para la API Key
-api_key = st.text_input("Ingresa tu Odds API Key:", type="password")
+# Carga automática desde Secrets (o entrada manual si no existe el secret)
+api_key = st.secrets.get("ODDS_API_KEY", "")
+
+if not api_key:
+    api_key = st.text_input("Ingresa tu Odds API Key:", type="password")
 
 def convertir_hora_local(fecha_utc_str):
     try:
