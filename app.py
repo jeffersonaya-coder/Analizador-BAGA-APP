@@ -9,11 +9,14 @@ st.set_page_config(page_title="Analizador BAGA", page_icon="⚽", layout="center
 st.title("⚽ Analizador BAGA")
 st.subheader("Picks de Alta Efectividad (@1.50 - @1.70)")
 
-# 1. Autenticación con API Key desde Secrets o manual
-# Carga desde Secrets o muestra el cuadro para ponerla a mano
-api_key_secret = st.secrets.get("ODDS_API_KEY", "d81fcbebbfec4f1be8074f82375dd0b7")
-api_key_input = st.text_input("Ingresa tu Odds API Key:", value=api_key_secret, type="password")
-api_key = api_key_input if api_key_input else api_key_secret
+# 1. Autenticación con API Key desde Secrets o entrada manual limpia de espacios
+api_key_secret = st.secrets.get("ODDS_API_KEY", "").strip()
+
+if api_key_secret:
+    api_key = api_key_secret
+else:
+    api_key = st.text_input("Ingresa tu Odds API Key:", type="password").strip()
+
 if st.button("🚀 OBTENER PICKS DEL DÍA"):
     if not api_key:
         st.error("Por favor, ingresa una API Key válida.")
@@ -68,7 +71,7 @@ if st.button("🚀 OBTENER PICKS DEL DÍA"):
                                             'bookmaker': bm_name
                                         })
 
-                    # --- SECCIÓN DE RESULTADOS MEJORADA ---
+                    # --- SECCIÓN DE RESULTADOS MOSTRADOS POR LIGA Y HORA ---
                     if picks_aprobados:
                         st.success(f"¡Análisis completo! {len(picks_aprobados)} partidos aprobados de {total_analizados} analizados.")
                         
