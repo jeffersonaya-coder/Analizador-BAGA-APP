@@ -134,8 +134,36 @@ if st.button("🚀 OBTENER PICKS DEL DÍA", use_container_width=True):
 
             st.success(f"¡Análisis completo! {len(aprobados)} partidos aprobados de {total_partidos} analizados.")
 
-            for p in aprobados:
-                with st.expander(f"📌 [{p['liga']}] {p['partido']}"):
+           # --- REEMPLAZAR LA SECCIÓN DONDE SE MUESTRAN LOS RESULTADOS POR ESTE BLOQUE ---
+
+if picks_aprobados:
+    st.success(f"¡Análisis completo! {len(picks_aprobados)} partidos aprobados de {total_analizados} analizados.")
+    
+    # 1. Ordenar todos los partidos por fecha y hora
+    picks_aprobados = sorted(picks_aprobados, key=lambda x: x.get('fecha_dt'))
+
+    # 2. Agrupar partidos por Liga
+    ligas_dict = {}
+    for pick in picks_aprobados:
+        liga = pick.get('liga', 'Otras Ligas')
+        if liga not in ligas_dict:
+            ligas_dict[liga] = []
+        ligas_dict[liga].append(pick)
+
+    # 3. Mostrar un desplegable por cada Liga
+    for liga, partidos in ligas_dict.items():
+        with st.expander(f"🏆 {liga} ({len(partidos)} partidos)"):
+            for p in partidos:
+                # Formato de fecha y hora local (ejemplo: 15/09 - 18:30)
+                hora_str = p['fecha_dt'].strftime("%d/%m - %H:%M")
+                
+                # Encabezado del partido con hora
+                st.markdown(f"**⏰ {hora_str} | {p['local']} vs {p['visitante']}**")
+                st.write(f"📌 **Pick recomendado:** {p['pick_nombre']} @ **{p['cuota']}**")
+                st.write(f"📊 **Casa de apuestas:** {p['bookmaker']}")
+                st.divider()
+else:
+    st.warning("No se encontraron partidos que cumplan los criterios para el día de hoy.")
                     st.write(f"⏰ **Programado:** {p['fecha']}")
                     st.write(f"📊 **Clasificación:** {p['caso']}")
                     st.write(f"🎯 **Pick Sugerido:** {p['pick']} ({p['cuota']})")
