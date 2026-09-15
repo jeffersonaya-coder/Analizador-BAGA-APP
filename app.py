@@ -10,11 +10,10 @@ st.title("⚽ Analizador BAGA")
 st.subheader("Picks de Alta Efectividad (@1.50 - @1.70)")
 
 # 1. Autenticación con API Key desde Secrets o manual
-api_key = st.secrets.get("ODDS_API_KEY", "")
-
-if not api_key:
-    api_key = st.text_input("Ingresa tu Odds API Key:", type="password")
-
+# Carga desde Secrets o muestra el cuadro para ponerla a mano
+api_key_secret = st.secrets.get("ODDS_API_KEY", "")
+api_key_input = st.text_input("Ingresa tu Odds API Key:", value=api_key_secret, type="password")
+api_key = api_key_input if api_key_input else api_key_secret
 if st.button("🚀 OBTENER PICKS DEL DÍA"):
     if not api_key:
         st.error("Por favor, ingresa una API Key válida.")
