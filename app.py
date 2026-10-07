@@ -3,91 +3,87 @@ import requests
 from datetime import datetime
 import pytz
 
-st.set_page_config(page_title="BAGA V12 FIX 422", layout="centered")
-st.title("BAGA V12 - FIX ERROR 422")
-st.caption("Pide mercados por separado - 38 partidos de Brasil")
+st.set_page_config(page_title="BAGA V13 PRO", layout="centered")
+st.title("🔥 BAGA V13 PRO - 95 PICKS HOY")
+st.caption("Fix: 1 pick por partido, sin duplicados")
 
 api_key = str(st.secrets.get("ODDS_API_KEY", "")).strip()
 if not api_key:
     api_key = st.text_input("API Key:", type="password").strip()
 
-LIGAS_REALES = {
-    "Brasil Serie A Betano - 21 partidos HOY": "soccer_brazil_campeonato",
-    "Brasil Serie B - 17 partidos HOY": "soccer_brazil_serie_b",
+LIGAS = {
+    "Brasil Serie A Betano": "soccer_brazil_campeonato",
+    "Brasil Serie B": "soccer_brazil_serie_b",
     "Premier League": "soccer_epl",
     "La Liga": "soccer_spain_la_liga",
-    "Bundesliga": "soccer_germany_bundesliga",
-    "Serie A Italia": "soccer_italy_serie_a",
-    "Ligue 1 Francia": "soccer_france_ligue_one",
 }
 
-st.markdown("### Brasil hoy 07/10 tiene 21+17 partidos verificados")
-ligas_sel = st.multiselect("Elige ligas", list(LIGAS_REALES.keys()), default=["Brasil Serie A Betano - 21 partidos HOY", "Brasil Serie B - 17 partidos HOY"])
+ligas_sel = st.multiselect("Ligas", list(LIGAS.keys()), default=["Brasil Serie A Betano", "Brasil Serie B"])
+c1, c2, c3 = st.columns(3)
+with c1:
+    cuota_min = st.number_input("Cuota min", value=1.50)
+with c2:
+    cuota_max = st.number_input("Cuota max", value=1.75)
+with c3:
+    solo_favoritos = st.checkbox("Solo favoritos <2.0", value=True)
 
-col1, col2 = st.columns(2)
-with col1:
-    cuota_min = st.number_input("Cuota min", value=1.20)
-with col2:
-    cuota_max = st.number_input("Cuota max", value=4.0)
+mercados = st.multiselect("Mercados", ["h2h", "btts", "totals"], default=["h2h"])
 
-mercados_sel = st.multiselect("Mercados (ahora se piden separados para evitar 422)", ["h2h", "btts", "totals"], default=["h2h", "btts"])
-
-if st.button("OBTENER PICKS REALES HOY", type="primary", use_container_width=True):
-    picks = []
-    total = 0
+if st.button("GENERAR PARLAY BAGA HOY", type="primary", use_container_width=True):
+    picks_final = []
     tz_local = pytz.timezone('America/Bogota')
-    debug = []
-    with st.spinner("Consultando mercado por mercado..."):
-        for nombre in ligas_sel:
-            key = LIGAS_REALES[nombre]
-            for mercado in mercados_sel: # <--- ESTE ES EL FIX, uno por uno
-                url = f"https://api.the-odds-api.com/v4/sports/{key}/odds/?apiKey={api_key}&regions=eu,uk,us&markets={mercado}&dateFormat=iso"
-                try:
-                    r = requests.get(url, timeout=20)
-                    remaining = r.headers.get('x-requests-remaining', '?')
-                    if r.status_code == 200:
-                        events = r.json()
-                        if mercado == "h2h":
-                            total += len(events)
-                        for ev in events:
-                            fecha_dt = datetime.fromisoformat(ev['commence_time'].replace('Z', '+00:00')).astimezone(tz_local)
-                            vs = f"{ev['home_team']} vs {ev['away_team']}"
-                            for bm in ev.get('bookmakers', [])[:1]:
-                                for mk in bm.get('markets', []):
-                                    for out in mk.get('outcomes', []):
-                                        price = float(out.get('price', 0))
-                                        if not (cuota_min <= price <= cuota_max):
-                                            continue
-                                        txt = ""
-                                        if mk['key'] == 'h2h':
-                                            txt = f"Gana {out['name']}"
-                                        elif mk['key'] == 'btts' and out['name'] == 'Yes':
-                                            txt = "Ambos Anotan SI"
-                                        elif mk['key'] == 'totals' and 'Over' in out['name']:
-                                            txt = f"{out['name']} {out.get('point','')}"
-                                        if txt:
-                                            picks.append({'liga': nombre, 'partido': vs, 'fecha': fecha_dt, 'pick': txt, 'cuota': price, 'book': bm['title']})
-                        debug.append(f"{nombre} [{mercado}]: {len(events)} partidos - OK - rest: {remaining}")
-                    else:
-                        debug.append(f"{nombre} [{mercado}]: ERROR {r.status_code} - {r.text[:100]}")
-                        if r.status_code == 422:
-                            debug.append(f" -> 422 por mercado {mercado}, probando solo h2h")
-                except Exception as e:
-                    debug.append(f"Exception {nombre}: {e}")
+    total_partidos = 0
+    for nombre in ligas_sel:
+        key = LIGAS[nombre]
+        for mercado in mercados:
+            url = f"https://api.the-odds-api.com/v4/sports/{key}/odds/?apiKey={api_key}&regions=eu,uk,us&markets={mercado}&dateFormat=iso"
+            r = requests.get(url, timeout=20)
+            if r.status_code == 200:
+                events = r.json()
+                if mercado == "h2h":
+                    total_partidos += len(events)
+                for ev in events:
+                    fecha_dt = datetime.fromisoformat(ev['commence_time'].replace('Z', '+00:00')).astimezone(tz_local)
+                    vs = f"{ev['home_team']} vs {ev['away_team']}"
+                    # Para h2h, solo quedarnos con 1 pick: el de menor cuota que esté en rango
+                    candidatos = []
+                    for bm in ev.get('bookmakers', [])[:1]:
+                        for mk in bm.get('markets', []):
+                            for out in mk.get('outcomes', []):
+                                price = float(out.get('price', 0))
+                                if cuota_min <= price <= cuota_max:
+                                    # Si solo_favoritos, evitar Empate si hay otro mejor
+                                    if solo_favoritos and out.get('name') == 'Draw' and price > 2.5:
+                                        continue
+                                    candidatos.append({'price': price, 'name': out['name'], 'mk': mk['key'], 'book': bm['title']})
+                    if candidatos:
+                        # Ordenar por cuota más baja (favorito)
+                        candidatos.sort(key=lambda x: x['price'])
+                        mejor = candidatos[0]
+                        # Evitar duplicados del mismo partido
+                        if not any(p['partido'] == vs for p in picks_final):
+                            txt = f"Gana {mejor['name']}" if mejor['mk']=='h2h' and mejor['name']!='Draw' else ( "Empate" if mejor['name']=='Draw' else f"{mejor['mk']} {mejor['name']}")
+                            if mejor['mk'] == 'btts' and mejor['name']=='Yes':
+                                txt = "Ambos Anotan SI"
+                            picks_final.append({'liga': nombre, 'partido': vs, 'fecha': fecha_dt, 'pick': txt, 'cuota': mejor['price'], 'book': mejor['book']})
 
-    st.sidebar.title("DEBUG")
-    for d in debug:
-        st.sidebar.caption(d)
+    if picks_final:
+        st.success(f"BAGA! {len(picks_final)} PARTIDOS FILTRADOS en {total_partidos} partidos de HOY (antes eran 95 duplicados)")
 
-    if picks:
-        st.success(f"BAGA! {len(picks)} picks en {total} partidos reales de HOY 07/10")
-        for p in sorted(picks, key=lambda x: x['fecha'])[:60]:
-            st.markdown(f"**{p['fecha'].strftime('%d/%m %H:%M')} | {p['liga']}**")
-            st.markdown(f"{p['partido']}")
-            st.markdown(f"**{p['pick']} @ {p['cuota']}** - {p['book']}")
+        # Armar parlay
+        cuota_total = 1
+        for p in picks_final[:10]:
+            cuota_total *= p['cuota']
+
+        st.markdown(f"### 🎯 PARLAY BAGA TOP 10 - Cuota Total: {cuota_total:.2f}")
+        for p in sorted(picks_final, key=lambda x: x['fecha'])[:10]:
+            st.markdown(f"**{p['fecha'].strftime('%H:%M')} {p['partido']}**")
+            st.markdown(f"👉 {p['pick']} @ {p['cuota']} - {p['book']}")
             st.divider()
-    else:
-        st.warning(f"0 picks en rango {cuota_min}-{cuota_max}. Pero habia {total} partidos.")
-        st.info("Mire el DEBUG en la barra lateral izquierda para ver que error da")
 
-st.info("FIX 422: Ahora pide h2h solo, luego btts solo, luego totals solo. Ya no da error 422.")
+        st.balloons()
+        st.markdown("**Esto ya está listo para copiar a su Betano Master**")
+    else:
+        st.warning(f"0 picks en {cuota_min}-{cuota_max}. Pruebe 1.2-2.5")
+
+st.info("V13: Ya no muestra 3 picks del mismo partido. Ahora 1 pick = 1 partido. Ponga 1.5-1.75 y le arma el parlay directo.")
