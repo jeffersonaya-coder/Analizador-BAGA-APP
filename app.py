@@ -17,11 +17,11 @@ if not api_key_odds:
 
 HEADERS_FOOT = {"x-apisports-key": api_key_football} if api_key_football else {}
 
-# MAPA PARA CORNERS API-FOOTBALL
 LIGAS_MAP_FOOT = {
     "soccer_brazil_campeonato": 71,
     "soccer_brazil_serie_b": 72,
     "soccer_colombia_primera_a": 239,
+    "soccer_colombia_primera_b": 240,
     "soccer_argentina_primera_division": 128,
     "soccer_chile_primera_division": 265,
     "soccer_epl": 39,
@@ -36,11 +36,10 @@ TODAS_LIGAS = [
     {"key": "soccer_brazil_campeonato", "title": "Brasileirao Serie A", "pais": "Brasil"},
     {"key": "soccer_brazil_serie_b", "title": "Brasileirao Serie B", "pais": "Brasil"},
     {"key": "soccer_brazil_serie_c", "title": "Brasil - Serie C", "pais": "Brasil"},
-    {"key": "soccer_colombia_primera_a", "title": "Colombia - Primera A", "pais": "Colombia"},
-    {"key": "soccer_colombia_primera_b", "title": "Colombia - Primera B", "pais": "Colombia"},
+    {"key": "soccer_colombia_primera_a", "title": "🇨🇴 BetPlay Dimayor - Primera A", "pais": "Colombia"},
+    {"key": "soccer_colombia_primera_b", "title": "🇨🇴 BetPlay Dimayor - Primera B (Torneo BetPlay)", "pais": "Colombia"},
     {"key": "soccer_chile_primera_division", "title": "Chile - Primera Division", "pais": "Chile"},
     {"key": "soccer_argentina_primera_division", "title": "Argentina - Liga Profesional", "pais": "Argentina"},
-    {"key": "soccer_argentina_primera_b", "title": "Argentina - Primera B", "pais": "Argentina"},
     {"key": "soccer_epl", "title": "Premier League", "pais": "Inglaterra"},
     {"key": "soccer_spain_la_liga", "title": "La Liga", "pais": "España"},
     {"key": "soccer_italy_serie_a", "title": "Serie A", "pais": "Italia"},
@@ -69,21 +68,6 @@ def get_odds(key, market, api_key):
     r = requests.get(url, timeout=15)
     return r.json() if r.status_code==200 else [], r.status_code, r.headers.get('x-requests-remaining','?')
 
-@st.cache_data(ttl=300)
-def get_fixtures_today(league_id):
-    if not api_key_football: return []
-    today = datetime.now().strftime("%Y-%m-%d")
-    url = f"https://v3.football.api-sports.io/fixtures?league={league_id}&season=2024&date={today}"
-    r = requests.get(url, headers=HEADERS_FOOT, timeout=15)
-    return r.json().get('response', []) if r.status_code==200 else []
-
-@st.cache_data(ttl=300)
-def get_odds_corners(fixture_id):
-    if not api_key_football: return []
-    url = f"https://v3.football.api-sports.io/odds?fixture={fixture_id}&bet=12"
-    r = requests.get(url, headers=HEADERS_FOOT, timeout=15)
-    return r.json().get('response', []) if r.status_code==200 else []
-
 sports_api, remaining, used = get_sports(api_key_odds)
 keys_activas = {s['key'] for s in sports_api if 'soccer' in s['key']}
 todas = sports_api + [l for l in TODAS_LIGAS if l['key'] not in keys_activas]
@@ -93,14 +77,11 @@ por_pais = defaultdict(list)
 for l in todas:
     por_pais[l.get('pais','Otros')].append(l)
 
-# CREDITOS ARRIBA COMO LE GUSTA
 c1,c2 = st.columns(2)
 with c1: st.metric("Creditos restantes", remaining)
 with c2: st.metric("Ligas totales", len(todas))
-if api_key_football:
-    st.success(f"✅ API-Football activa - Corners disponibles (100 req/dia)")
+if api_key_football: st.success(f"✅ API-Football activa")
 
-# TODOS LOS PAISES Y LIGAS - COMO ANTES
 st.markdown("### 🌍 Paises y Ligas - Todas disponibles")
 for pais, ligas in sorted(por_pais.items()):
     with st.expander(f"{pais} - {len(ligas)} ligas"):
@@ -110,11 +91,11 @@ for pais, ligas in sorted(por_pais.items()):
             st.caption(f"{activo} {corners_ok} | {l['title']}")
 
 st.divider()
-
-# ELEGIR - TODOS LOS PAISES INCLUIDO OTROS
 st.markdown("### Elige liga para ver partidos de hoy")
 paises_disp = sorted(list(por_pais.keys()))
-pais_sel = st.selectbox("Pais", paises_disp, index=paises_disp.index("Brasil") if "Brasil" in paises_disp else 0)
+# Que Colombia salga primero si quiere Master
+default_pais = paises_disp.index("Colombia") if "Colombia" in paises_disp else 0
+pais_sel = st.selectbox("Pais", paises_disp, index=default_pais)
 ligas_pais = por_pais.get(pais_sel, [])
 opciones = {f"{l['title']}": l for l in ligas_pais}
 liga_sel = st.selectbox(f"Ligas de {pais_sel}", list(opciones.keys()))
@@ -124,27 +105,25 @@ if st.button(f"VER PICK BAGA - {liga_obj['title']}", type="primary", use_contain
     partidos_raw, status, rem = get_odds(liga_obj['key'], "h2h", api_key_odds)
     st.caption(f"Creditos restantes: {rem} | Partidos: {len(partidos_raw)}")
     if status!=200 or not partidos_raw:
-        st.error("Sin partidos hoy en esta liga, pruebe Brasil Serie B")
+        st.error("Sin partidos hoy en esta liga")
         st.stop()
-
     tz_local = pytz.timezone('America/Bogota')
     hoy = []
     for ev in partidos_raw:
         dt = datetime.fromisoformat(ev['commence_time'].replace('Z', '+00:00')).astimezone(tz_local)
         if dt.date()!= datetime.now(tz_local).date(): continue
-        cuota_l = cuota_e = cuota_v = "?"
-        fav = ""; fav_c = 99
+        fav = ""; fav_c = 99; cl=ce=cv="?"
         for bm in ev.get('bookmakers', [])[:1]:
             for mk in bm.get('markets', []):
                 for out in mk.get('outcomes', []):
                     if out['name']==ev['home_team']:
-                        cuota_l = out['price']
+                        cl = out['price']
                         if out['price'] < fav_c: fav_c = out['price']; fav = ev['home_team']
                     elif out['name']==ev['away_team']:
-                        cuota_v = out['price']
+                        cv = out['price']
                         if out['price'] < fav_c: fav_c = out['price']; fav = ev['away_team']
-                    elif out['name']=='Draw': cuota_e = out['price']
-        hoy.append({'partido': f"{ev['home_team']} vs {ev['away_team']}", 'hora': dt.strftime("%H:%M"), 'local': cuota_l, 'empate': cuota_e, 'visita': cuota_v, 'fav': fav, 'fav_cuota': fav_c, 'id': ev['id'], 'key': liga_obj['key'], 'dt': dt, 'home': ev['home_team'], 'away': ev['away_team']})
+                    elif out['name']=='Draw': ce = out['price']
+        hoy.append({'partido': f"{ev['home_team']} vs {ev['away_team']}", 'hora': dt.strftime("%H:%M"), 'local': cl, 'empate': ce, 'visita': cv, 'fav': fav, 'fav_cuota': fav_c, 'id': ev['id'], 'key': liga_obj['key'], 'dt': dt})
 
     if not hoy:
         st.warning("No hay partidos hoy en esta liga")
@@ -161,35 +140,13 @@ if st.button(f"VER PICK BAGA - {liga_obj['title']}", type="primary", use_contain
         st.caption(f"Favorito: {p['fav']} @{p['fav_cuota']}")
         st.divider()
 
-    # CORNERS
-    st.markdown("### 🚩 Corners - API Football")
-    corners_encontrados = False
-    if api_key_football and liga_obj['key'] in LIGAS_MAP_FOOT:
-        league_id = LIGAS_MAP_FOOT[liga_obj['key']]
-        fixtures = get_fixtures_today(league_id)
-        if fixtures:
-            for fx in fixtures[:2]:
-                fid = fx['fixture']['id']
-                odds_c = get_odds_corners(fid)
-                if odds_c:
-                    for book in odds_c[:1]:
-                        for bet in book.get('bets',[]):
-                            for val in bet.get('values',[])[:3]:
-                                st.success(f"🚩 {fx['teams']['home']['name']} vs {fx['teams']['away']['name']} - {val['value']} @ {val['odd']}")
-                                corners_encontrados=True
-    if not corners_encontrados:
-        st.info("Estimado BAGA: Over 8.5 Corners @1.75 disponible para partidos con favorito claro")
-
-    # PICK BAGA DEL DIA FINAL
     hoy.sort(key=lambda x: x['fav_cuota'])
     mas = hoy[0]
     st.markdown(f"## 🏆 PICK BAGA DEL DÍA")
     st.markdown(f"**{mas['partido']} - {mas['hora']}**")
-    st.markdown(f"**Favorito: {mas['fav']} @{mas['fav_cuota']}**")
-
     totales,_,_ = get_odds(mas['key'], "totals", api_key_odds)
     btts,_,rem3 = get_odds(mas['key'], "btts", api_key_odds)
-    st.caption(f"Creditos restantes: {rem3} | Gasto: 3 creditos")
+    st.caption(f"Creditos restantes: {rem3}")
 
     picks=[]
     for ev in totales+btts:
@@ -199,20 +156,19 @@ if st.button(f"VER PICK BAGA - {liga_obj['title']}", type="primary", use_contain
                 for out in mk.get('outcomes', []):
                     price=float(out.get('price',0))
                     if mk['key']=='totals' and out['name']=='Over' and out.get('point')==1.5 and 1.40<=price<=1.95:
-                        picks.append({'pick': f"Over 1.5 Goles @ {price}", 'cuota': price, 'logica': f"Favorito {mas['fav']} @{mas['fav_cuota']} superior, minimo 2 goles", 'book': bm['title']})
+                        picks.append({'pick': f"Over 1.5 Goles @ {price}", 'cuota': price, 'logica': f"Favorito {mas['fav']} @{mas['fav_cuota']} superior", 'book': bm['title']})
                     if mk['key']=='btts' and out['name']=='No' and 1.50<=price<=2.10:
-                        picks.append({'pick': f"Ambos NO anotan @ {price}", 'cuota': price, 'logica': "Favorito domina, rival no marca", 'book': bm['title']})
+                        picks.append({'pick': f"Ambos NO anotan @ {price}", 'cuota': price, 'logica': "Favorito domina", 'book': bm['title']})
 
     if picks:
         mejor = sorted(picks, key=lambda x: abs(x['cuota']-1.70))[0]
-        st.success("PICK MAS LOGICO Y ALTAMENTE PROBABLE:")
+        st.success("PICK MAS LOGICO:")
         st.markdown(f"### 👉 {mejor['pick']}")
-        st.markdown(f"**Logica BAGA:** {mejor['logica']}")
-        st.markdown(f"**Book:** {mejor['book']}")
+        st.markdown(f"**Logica:** {mejor['logica']}")
         if mas['fav_cuota']<=1.85:
-            st.info(f"👉 Extra Corners: Over 8.5 Corners @1.75 - {mas['fav']} atacará mucho")
+            st.info(f"👉 Extra: Over 8.5 Corners @1.75")
         st.balloons()
     else:
-        st.info(f"Pick seguro: Gana {mas['fav']} @{mas['fav_cuota']} + Over 8.5 Corners")
+        st.info(f"Pick: Gana {mas['fav']} @{mas['fav_cuota']}")
 
-st.caption("PICK BAGA DEL DIA V24 - Todos los paises + Corners")
+st.caption("V24.1 - BetPlay A y B incluidas + Todos los paises")
