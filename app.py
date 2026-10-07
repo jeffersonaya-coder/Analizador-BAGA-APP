@@ -1,100 +1,157 @@
 import streamlit as st
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 
-# Configuración de la página
-st.set_page_config(page_title="Analizador BAGA", page_icon="⚽", layout="centered")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="Analizador BAGA V4", page_icon="⚽", layout="centered")
 
-st.title("⚽ Analizador BAGA")
-st.subheader("Picks de Alta Efectividad (@1.50 - @1.70)")
+st.title("⚽ Analizador BAGA V4")
+st.subheader("Saver Edition - 500 Créditos")
+st.caption("Optimizado para no quemar la API Key - Octubre 2026")
 
-api_key = "d81fcbebbfec4f1be8074f82375dd0b7"
+# --- LÓGICA INTELIGENTE DE LIGAS SEGÚN FECHA ---
+def get_ligas_del_dia():
+    hoy = datetime.now()
+    dia = hoy.day
+    mes = hoy.month
+    weekday = hoy.weekday()
 
+    # Fecha FIFA Nations League: 1-6 Octubre y 12-16 Noviembre
+    if (mes == 10 and dia <= 6) or (mes == 11 and 12 <= dia <= 16):
+        return {
+            "UEFA Nations League": "soccer_uefa_nations_league",
+            "Premier League": "soccer_epl",
+            "La Liga": "soccer_spain_la_liga"
+        }
+    # Fin de semana: Más volumen con Sudamérica
+    elif weekday >= 5:
+        return {
+            "Premier League": "soccer_epl",
+            "La Liga": "soccer_spain_la_liga",
+            "Serie A": "soccer_italy_serie_a",
+            "Brasileirao": "soccer_brazil_campeonato",
+            "Liga Argentina": "soccer_argentina_primera_division"
+        }
+    # Entre semana
+    else:
+        return {
+            "Premier League": "soccer_epl",
+            "La Liga": "soccer_spain_la_liga",
+            "Serie A": "soccer_italy_serie_a"
+        }
+
+LIGAS_OBJETIVO = get_ligas_del_dia()
+
+# --- API KEY ---
+api_key = str(st.secrets.get("ODDS_API_KEY", "")).strip()
 if not api_key:
     api_key = st.text_input("Ingresa tu Odds API Key:", type="password").strip()
 
-if st.button("🚀 OBTENER PICKS DEL DÍA"):
+# --- UI DE FILTROS ---
+st.info(f"📅 Hoy {datetime.now().strftime('%d/%m/%Y')} | Analizando: {', '.join(LIGAS_OBJETIVO.keys())} | Costo: {len(LIGAS_OBJETIVO)} créditos")
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    cuota_min = st.number_input("Cuota min", value=1.50, step=0.05)
+with col2:
+    cuota_max = st.number_input("Cuota max", value=1.70, step=0.05)
+with col3:
+    mercados_sel = st.multiselect("Mercados", ["h2h", "btts", "totals"], default=["h2h", "btts", "totals"])
+
+# --- BOTÓN PRINCIPAL ---
+if st.button("🚀 OBTENER PICKS BAGA", use_container_width=True):
     if not api_key:
-        st.error("Por favor, ingresa una API Key válida.")
-    else:
-        with st.spinner("Consultando partidos y procesando cuotas..."):
+        st.error("Falta API Key Master")
+        st.stop()
+    
+    picks = []
+    total_analizados = 0
+    tz_local = pytz.timezone('America/Bogota')
+    
+    now_utc = datetime.now(pytz.utc)
+    tomorrow_utc = now_utc + timedelta(hours=24)
+    
+    with st.spinner(f"Consultando {len(LIGAS_OBJETIVO)} ligas (solo 24h)..."):
+        for nombre_liga, sport_key in LIGAS_OBJETIVO.items():
+            markets_str = ",".join(mercados_sel) if mercados_sel else "h2h"
+            url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/?apiKey={api_key}&regions=eu,uk&markets={markets_str}&dateFormat=iso&commenceTimeFrom={now_utc.isoformat()}&commenceTimeTo={tomorrow_utc.isoformat()}"
+            
             try:
-                # Consulta a The Odds API
-                url = f"https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={api_key}&regions=eu,us,uk&markets=h2h,totals&dateFormat=iso"
-                response = requests.get(url)
+                r = requests.get(url, timeout=20)
+                remaining = r.headers.get('x-requests-remaining', '?')
+                used = r.headers.get('x-requests-used', '?')
                 
-                if response.status_code == 401:
-                    masked = api_key[:4] + "..." + api_key[-4:] if len(api_key) > 8 else "vacía"
-                    st.error(f"Error 401: Clave no autorizada ({masked}). Revisa la clave ingresada en Secrets.")
-                elif response.status_code != 200:
-                    st.error(f"Error en la API ({response.status_code}). Verifica tu cuota de uso.")
-                else:
-                    events = response.json()
-                    picks_aprobados = []
-                    total_analizados = len(events)
+                if r.status_code == 200:
+                    events = r.json()
+                    total_analizados += len(events)
                     
-                    tz_local = pytz.timezone('America/Bogota')
-
                     for event in events:
-                        liga = event.get('sport_title', 'Otras Ligas')
-                        home_team = event.get('home_team')
-                        away_team = event.get('away_team')
-                        commence_time_str = event.get('commence_time')
+                        fecha_dt = datetime.fromisoformat(event['commence_time'].replace('Z', '+00:00')).astimezone(tz_local)
+                        vs = f"{event.get('home_team')} vs {event.get('away_team')}"
                         
-                        fecha_dt = datetime.fromisoformat(commence_time_str.replace('Z', '+00:00'))
-                        fecha_local = fecha_dt.astimezone(tz_local)
-                        
-                        bookmakers = event.get('bookmakers', [])
-                        if not bookmakers:
-                            continue
-                            
-                        bm = bookmakers[0]
-                        bm_name = bm.get('title', 'Casa principal')
-                        
-                        for market in bm.get('markets', []):
-                            if market.get('key') == 'h2h':
-                                for outcome in market.get('outcomes', []):
-                                    price = outcome.get('price', 0.0)
-                                    name = outcome.get('name')
+                        for bm in event.get('bookmakers', [])[:1]:
+                            for market in bm.get('markets', []):
+                                key = market.get('key')
+                                for out in market.get('outcomes', []):
+                                    price = float(out.get('price', 0))
+                                    if not (cuota_min <= price <= cuota_max):
+                                        continue
+
+                                    pick_text = ""
+                                    icono = ""
+                                    if key == 'h2h':
+                                        pick_text = f"Gana {out.get('name')}"
+                                        icono = "🏆"
+                                    elif key == 'btts' and out.get('name') == 'Yes':
+                                        pick_text = "Ambos Anotan: SI"
+                                        icono = "⚽"
+                                    elif key == 'totals' and 'Over' in str(out.get('name','')) and out.get('point') == 1.5:
+                                        pick_text = "Over 1.5 Goles"
+                                        icono = "📈"
                                     
-                                    if 1.50 <= price <= 1.70:
-                                        picks_aprobados.append({
-                                            'liga': liga,
-                                            'local': home_team,
-                                            'visitante': away_team,
-                                            'fecha_dt': fecha_local,
-                                            'pick_nombre': f"Victoria de {name}",
+                                    if pick_text:
+                                        picks.append({
+                                            'liga': event.get('sport_title', nombre_liga),
+                                            'partido': vs,
+                                            'fecha_dt': fecha_dt,
+                                            'pick': pick_text,
                                             'cuota': price,
-                                            'bookmaker': bm_name
+                                            'bookmaker': bm.get('title'),
+                                            'mercado': key.upper(),
+                                            'icono': icono
                                         })
-
-                    # --- RESULTADOS ORGANIZADOS POR LIGA Y FECHA/HORA ---
-                    if picks_aprobados:
-                        st.success(f"¡Análisis completo! {len(picks_aprobados)} partidos aprobados de {total_analizados} analizados.")
-                        
-                        # Orden cronológico por hora
-                        picks_aprobados = sorted(picks_aprobados, key=lambda x: x['fecha_dt'])
-
-                        # Agrupar por Liga
-                        ligas_dict = {}
-                        for pick in picks_aprobados:
-                            lg = pick['liga']
-                            if lg not in ligas_dict:
-                                ligas_dict[lg] = []
-                            ligas_dict[lg].append(pick)
-
-                        # Renderizado por expander por liga
-                        for liga, partidos in ligas_dict.items():
-                            with st.expander(f"🏆 {liga} ({len(partidos)} partidos)"):
-                                for p in partidos:
-                                    hora_str = p['fecha_dt'].strftime("%d/%m - %H:%M")
-                                    st.markdown(f"**⏰ {hora_str} | {p['local']} vs {p['visitante']}**")
-                                    st.write(f"📌 **Pick:** {p['pick_nombre']} @ **{p['cuota']}**")
-                                    st.write(f"📊 **Casa:** {p['bookmaker']}")
-                                    st.divider()
-                    else:
-                        st.warning("No se encontraron partidos en el rango @1.50 - @1.70 para hoy.")
-                        
+                
+                elif r.status_code == 401:
+                    st.error("❌ 401: Se acabaron los 500 créditos o Key inválida")
+                    st.stop()
+                elif r.status_code == 422:
+                    continue
+                    
             except Exception as e:
-                st.error(f"Error inesperado: {e}")
+                st.warning(f"Error en {nombre_liga}: {e}")
+                continue
+        
+        # Mostrar créditos al final
+        st.sidebar.success(f"Créditos restantes: {remaining} / Usados: {used}")
+
+    # --- RESULTADOS ---
+    if picks:
+        picks = sorted(picks, key=lambda x: x['fecha_dt'])
+        st.success(f"¡BAGA! {len(picks)} picks encontrados en {total_analizados} partidos.")
+        
+        ligas_dict = {}
+        for p in picks:
+            ligas_dict.setdefault(p['liga'], []).append(p)
+        
+        for liga, lista in ligas_dict.items():
+            with st.expander(f"🏆 {liga} ({len(lista)} picks)", expanded=True):
+                for p in lista:
+                    hora = p['fecha_dt'].strftime("%d/%m %H:%M")
+                    st.markdown(f"**⏰ {hora} | {p['partido']}**")
+                    st.markdown(f"{p['icono']} **{p['mercado']}: {p['pick']} @ {p['cuota']}**")
+                    st.caption(f"📊 {p['bookmaker']}")
+                    st.divider()
+    else:
+        st.warning(f"No hay picks @ {cuota_min}-{cuota_max} para las próximas 24h. Analizados: {total_analizados} partidos.")
+        st.info("Tip: Si es Lunes/Martes hay pocos partidos, intente mañana o baje a 1.40-1.80")
