@@ -75,8 +75,7 @@ if st.button("🚀 OBTENER PICKS BAGA", use_container_width=True):
     with st.spinner(f"Consultando {len(LIGAS_OBJETIVO)} ligas (solo 24h)..."):
         for nombre_liga, sport_key in LIGAS_OBJETIVO.items():
             markets_str = ",".join(mercados_sel) if mercados_sel else "h2h"
-            url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/?apiKey={api_key}&regions=eu,uk&markets={markets_str}&dateFormat=iso&commenceTimeFrom={now_utc.isoformat()}&commenceTimeTo={tomorrow_utc.isoformat()}"
-            
+           url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/?apiKey={api_key}&regions=eu,uk&markets={markets_str}&dateFormat=iso"
             try:
                 r = requests.get(url, timeout=20)
                 remaining = r.headers.get('x-requests-remaining', '?')
