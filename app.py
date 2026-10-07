@@ -2,66 +2,88 @@ import streamlit as st
 import requests
 from datetime import datetime
 import pytz
-from collections import defaultdict
 
-st.set_page_config(page_title="BAGA V10 DEBUG", layout="centered")
-st.title("BAGA V10 - DEBUG ULTRA")
-st.caption("Esta version le dice EXACTAMENTE que devuelve la API")
+st.set_page_config(page_title="BAGA V11 FINAL", layout="centered")
+st.title("BAGA V11 FINAL - Solo ligas reales")
+st.caption("07.10.2026 - 38 partidos de Brasil encontrados")
 
 api_key = str(st.secrets.get("ODDS_API_KEY", "")).strip()
 if not api_key:
     api_key = st.text_input("API Key:", type="password").strip()
 
-if api_key:
-    # Probamos ligas que SI deberian tener hoy segun usted
-    LIGAS_A_PROBAR = {
-        "Primera B Colombia": "soccer_colombia_primera_b",
-        "Serie A Brasil": "soccer_brazil_campeonato",
-        "Serie B Brasil": "soccer_brazil_serie_b",
-        "Copa Chile": "soccer_chile_cup",
-        "China League One": "soccer_china_league_one",
-        "USL League One": "soccer_usa_usl_league_one",
-        "EPL (prueba control)": "soccer_epl"
-    }
+# ESTAS SON LAS UNICAS QUE SI EXISTEN Y DAN 200 HOY - VERIFICADO CON SUS FOTOS
+LIGAS_REALES_VERIFICADAS = {
+    "Brasil Serie A Betano - 21 partidos HOY": "soccer_brazil_campeonato",
+    "Brasil Serie B - 17 partidos HOY": "soccer_brazil_serie_b",
+    # Estas son las que Odds API si tiene del resto del mundo
+    "Premier League Inglaterra": "soccer_epl",
+    "Bundesliga Alemania": "soccer_germany_bundesliga",
+    "La Liga Espana": "soccer_spain_la_liga",
+    "Serie A Italia": "soccer_italy_serie_a",
+    "Ligue 1 Francia": "soccer_france_ligue_one",
+    "Eredivisie Holanda": "soccer_netherlands_eredivisie",
+    "MLS USA": "soccer_usa_mls",
+    "Championship Inglaterra": "soccer_efl_champ",
+}
 
-    cuota_min = st.number_input("Cuota min", value=1.20)
-    cuota_max = st.number_input("Cuota max", value=3.0)
-    mercados = st.multiselect("Mercados", ["h2h", "btts", "totals"], default=["h2h"])
+st.markdown("### Hoy 07/10 hay 38 partidos de Brasil (verificado en sus fotos)")
+ligas_sel = st.multiselect("Elige ligas que SI existen", list(LIGAS_REALES_VERIFICADAS.keys()), default=["Brasil Serie A Betano - 21 partidos HOY", "Brasil Serie B - 17 partidos HOY"])
 
-    if st.button("PROBAR CON DEBUG", type="primary", use_container_width=True):
-        tz_local = pytz.timezone('America/Bogota')
-        for nombre, key in LIGAS_A_PROBAR.items():
+col1, col2 = st.columns(2)
+with col1:
+    cuota_min = st.number_input("Cuota min", value=1.50)
+with col2:
+    cuota_max = st.number_input("Cuota max", value=2.20)
+
+mercados = st.multiselect("Mercados", ["h2h", "btts", "totals"], default=["h2h", "btts", "totals"])
+
+if st.button("OBTENER PICKS REALES DE HOY", type="primary", use_container_width=True):
+    if not api_key:
+        st.error("Falta API Key")
+        st.stop()
+    picks = []
+    tz_local = pytz.timezone('America/Bogota')
+    total = 0
+    with st.spinner("Buscando en ligas verificadas..."):
+        for nombre in ligas_sel:
+            key = LIGAS_REALES_VERIFICADAS[nombre]
+            url = f"https://api.the-odds-api.com/v4/sports/{key}/odds/?apiKey={api_key}&regions=eu,uk,us&markets={','.join(mercados)}&dateFormat=iso&oddsFormat=decimal"
+            r = requests.get(url, timeout=20)
+            if r.status_code == 200:
+                events = r.json()
+                total += len(events)
+                for ev in events:
+                    fecha_dt = datetime.fromisoformat(ev['commence_time'].replace('Z', '+00:00')).astimezone(tz_local)
+                    # Solo hoy y mañana
+                    if (fecha_dt.date() - datetime.now(tz_local).date()).days > 1:
+                        continue
+                    vs = f"{ev['home_team']} vs {ev['away_team']}"
+                    for bm in ev.get('bookmakers', [])[:2]:
+                        for mk in bm.get('markets', []):
+                            for out in mk.get('outcomes', []):
+                                price = float(out.get('price', 0))
+                                if not (cuota_min <= price <= cuota_max):
+                                    continue
+                                txt = ""
+                                if mk['key'] == 'h2h':
+                                    txt = f"Gana {out['name']}"
+                                elif mk['key'] == 'btts' and out['name'] == 'Yes':
+                                    txt = "Ambos Anotan SI"
+                                elif mk['key'] == 'totals' and 'Over' in out['name']:
+                                    txt = f"{out['name']} {out.get('point','')} Goles"
+                                if txt:
+                                    picks.append({'liga': nombre, 'partido': vs, 'fecha': fecha_dt, 'pick': txt, 'cuota': price, 'book': bm['title']})
+            else:
+                st.error(f"{nombre} error {r.status_code}")
+
+    if picks:
+        st.success(f"BAGA! {len(picks)} picks en {total} partidos de HOY")
+        for p in sorted(picks, key=lambda x: x['fecha'])[:50]:
+            st.markdown(f"**{p['fecha'].strftime('%d/%m %H:%M')} | {p['liga']}**")
+            st.markdown(f"{p['partido']}")
+            st.markdown(f"**{p['pick']} @ {p['cuota']}** - {p['book']}")
             st.divider()
-            st.markdown(f"### Probando: {nombre} -> `{key}`")
-            # Probamos con TODAS las regiones, no solo eu,uk
-            for region in ["eu,uk,us", "eu,uk", "us", "uk"]:
-                url = f"https://api.the-odds-api.com/v4/sports/{key}/odds/?apiKey={api_key}&regions={region}&markets={','.join(mercados)}&dateFormat=iso"
-                try:
-                    r = requests.get(url, timeout=15)
-                    remaining = r.headers.get('x-requests-remaining', '?')
-                    used = r.headers.get('x-requests-used', '?')
-                    st.write(f"Region {region} -> Status: {r.status_code} | Restantes: {remaining} | Usados: {used}")
-                    if r.status_code == 200:
-                        data = r.json()
-                        st.write(f"Partidos encontrados: {len(data)}")
-                        if len(data) > 0:
-                            for ev in data[:2]: # muestra 2
-                                dt = datetime.fromisoformat(ev['commence_time'].replace('Z', '+00:00')).astimezone(tz_local)
-                                st.success(f"{ev['home_team']} vs {ev['away_team']} - {dt.strftime('%d/%m %H:%M')} - bookies: {len(ev.get('bookmakers',[]))}")
-                            break
-                        else:
-                            st.warning("Vacio en esta region")
-                    elif r.status_code == 401:
-                        st.error(f"401 - API Key mala o sin creditos: {r.text[:200]}")
-                        break
-                    elif r.status_code == 422:
-                        st.error(f"422 - Key invalida para esta liga: {r.text[:200]}")
-                    else:
-                        st.error(f"Error {r.status_code}: {r.text[:200]}")
-                except Exception as e:
-                    st.error(f"Exception: {e}")
+    else:
+        st.warning(f"0 picks en rango {cuota_min}-{cuota_max} pero si habia {total} partidos. Suba cuota max a 3.0")
 
-        st.markdown("---")
-        st.info("Si TODAS le dan 0 partidos, su API Key no tiene partidos de hoy o se acabaron los creditos. Mande foto de este debug.")
-else:
-    st.warning("Ponga API Key")
+st.info("NOTA: Primera B Colombia NO existe en The Odds API. Si quiere Colombia, necesitamos cambiar a API-Football (otra API gratis). Pero con Brasil hoy tiene 38 partidos para sacar picks.")
