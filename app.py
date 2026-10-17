@@ -1,174 +1,197 @@
-import streamlit as st
-import requests
-from datetime import datetime
+import csv
+import io
+from datetime import datetime, timedelta
+from statistics import pstdev
+
 import pytz
-from collections import defaultdict
+import requests
+import streamlit as st
 
-st.set_page_config(page_title="PICK BAGA DEL DIA", layout="centered")
-st.title("🎯 PICK BAGA DEL DÍA")
-st.caption("Partidos de hoy + Corners + Mejor Pick")
+API = "https://api.the-odds-api.com/v4"
+TZ = pytz.timezone("America/Bogota")
 
-api_key_odds = str(st.secrets.get("ODDS_API_KEY", "")).strip()
-api_key_football = str(st.secrets.get("API_FOOTBALL_KEY", "")).strip()
 
-if not api_key_odds:
-    api_key_odds = st.text_input("ODDS_API_KEY:", type="password").strip()
-    if not api_key_odds: st.stop()
+# ---------------------------------------------------------------- API
+def pedir(ruta, clave, **params):
+    """The Odds API. /sports y /events son GRATIS; /odds cuesta mercados x regiones créditos."""
+    r = requests.get(f"{API}{ruta}", params={"apiKey": clave, **params}, timeout=25)
+    uso = {"restantes": r.headers.get("x-requests-remaining"), "ultimo": r.headers.get("x-requests-last")}
+    if r.status_code != 200:
+        raise RuntimeError(f"HTTP {r.status_code}: {r.text[:160]}")
+    return r.json(), uso
 
-HEADERS_FOOT = {"x-apisports-key": api_key_football} if api_key_football else {}
 
-LIGAS_MAP_FOOT = {
-    "soccer_brazil_campeonato": 71,
-    "soccer_brazil_serie_b": 72,
-    "soccer_colombia_primera_a": 239,
-    "soccer_colombia_primera_b": 240,
-    "soccer_argentina_primera_division": 128,
-    "soccer_chile_primera_division": 265,
-    "soccer_epl": 39,
-    "soccer_spain_la_liga": 140,
-    "soccer_italy_serie_a": 135,
-    "soccer_germany_bundesliga": 78,
-    "soccer_mexico_ligamx": 262,
-    "soccer_usa_mls": 253,
-}
+@st.cache_data(ttl=6 * 3600)
+def ligas_futbol(clave):
+    datos, _ = pedir("/sports", clave)  # gratis
+    return sorted([(s["key"], s["title"]) for s in datos if s.get("group") == "Soccer" and s.get("active")],
+                  key=lambda x: x[1])
 
-TODAS_LIGAS = [
-    {"key": "soccer_brazil_campeonato", "title": "Brasileirao Serie A", "pais": "Brasil"},
-    {"key": "soccer_brazil_serie_b", "title": "Brasileirao Serie B", "pais": "Brasil"},
-    {"key": "soccer_brazil_serie_c", "title": "Brasil - Serie C", "pais": "Brasil"},
-    {"key": "soccer_colombia_primera_a", "title": "🇨🇴 BetPlay Dimayor - Primera A", "pais": "Colombia"},
-    {"key": "soccer_colombia_primera_b", "title": "🇨🇴 BetPlay Dimayor - Primera B (Torneo BetPlay)", "pais": "Colombia"},
-    {"key": "soccer_chile_primera_division", "title": "Chile - Primera Division", "pais": "Chile"},
-    {"key": "soccer_argentina_primera_division", "title": "Argentina - Liga Profesional", "pais": "Argentina"},
-    {"key": "soccer_epl", "title": "Premier League", "pais": "Inglaterra"},
-    {"key": "soccer_spain_la_liga", "title": "La Liga", "pais": "España"},
-    {"key": "soccer_italy_serie_a", "title": "Serie A", "pais": "Italia"},
-    {"key": "soccer_germany_bundesliga", "title": "Bundesliga", "pais": "Alemania"},
-    {"key": "soccer_france_ligue_one", "title": "Ligue 1", "pais": "Francia"},
-    {"key": "soccer_mexico_ligamx", "title": "Liga MX", "pais": "Mexico"},
-    {"key": "soccer_usa_mls", "title": "MLS", "pais": "USA"},
-    {"key": "soccer_uruguay_primera", "title": "Uruguay - Primera", "pais": "Uruguay"},
-    {"key": "soccer_paraguay_primera_division", "title": "Paraguay - Primera", "pais": "Paraguay"},
-    {"key": "soccer_peru_primera", "title": "Peru - Liga 1", "pais": "Peru"},
-    {"key": "soccer_ecuador_primera_a", "title": "Ecuador - Serie A", "pais": "Ecuador"},
-    {"key": "soccer_conmebol_copa_libertadores", "title": "Copa Libertadores", "pais": "CONMEBOL"},
-    {"key": "soccer_uefa_champs_league", "title": "Champions League", "pais": "Europa"},
-]
 
-@st.cache_data(ttl=3600)
-def get_sports(api_key):
-    r = requests.get(f"https://api.the-odds-api.com/v4/sports/?apiKey={api_key}&all=true", timeout=15)
-    if r.status_code==200:
-        return r.json(), r.headers.get('x-requests-remaining','?'), r.headers.get('x-requests-used','?')
-    return [], "?", "?"
+def ventana_utc(dia):
+    ini = TZ.localize(datetime(dia.year, dia.month, dia.day))
+    fin = ini + timedelta(days=1)
+    f = lambda d: d.astimezone(pytz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return f(ini), f(fin)
 
-@st.cache_data(ttl=300)
-def get_odds(key, market, api_key):
-    url = f"https://api.the-odds-api.com/v4/sports/{key}/odds/?apiKey={api_key}&regions=eu,uk,us&markets={market}&dateFormat=iso"
-    r = requests.get(url, timeout=15)
-    return r.json() if r.status_code==200 else [], r.status_code, r.headers.get('x-requests-remaining','?')
 
-sports_api, remaining, used = get_sports(api_key_odds)
-keys_activas = {s['key'] for s in sports_api if 'soccer' in s['key']}
-todas = sports_api + [l for l in TODAS_LIGAS if l['key'] not in keys_activas]
-todas = [l for l in todas if 'soccer' in l.get('key','')]
+@st.cache_data(ttl=900)
+def eventos_dia(clave, liga, dia):
+    desde, hasta = ventana_utc(dia)
+    datos, _ = pedir(f"/sports/{liga}/events", clave, commenceTimeFrom=desde, commenceTimeTo=hasta)  # gratis
+    return datos
 
-por_pais = defaultdict(list)
-for l in todas:
-    por_pais[l.get('pais','Otros')].append(l)
 
-c1,c2 = st.columns(2)
-with c1: st.metric("Creditos restantes", remaining)
-with c2: st.metric("Ligas totales", len(todas))
-if api_key_football: st.success(f"✅ API-Football activa")
+@st.cache_data(ttl=600)
+def cuotas_liga(clave, liga, dia):
+    desde, hasta = ventana_utc(dia)
+    return pedir(f"/sports/{liga}/odds", clave, regions="eu", markets="h2h", oddsFormat="decimal",
+                 commenceTimeFrom=desde, commenceTimeTo=hasta)  # 1 crédito por liga
 
-st.markdown("### 🌍 Paises y Ligas - Todas disponibles")
-for pais, ligas in sorted(por_pais.items()):
-    with st.expander(f"{pais} - {len(ligas)} ligas"):
-        for l in ligas:
-            activo = "🟢 Partidos hoy" if l['key'] in keys_activas else "⚪"
-            corners_ok = "🚩" if l['key'] in LIGAS_MAP_FOOT else ""
-            st.caption(f"{activo} {corners_ok} | {l['title']}")
 
-st.divider()
-st.markdown("### Elige liga para ver partidos de hoy")
-paises_disp = sorted(list(por_pais.keys()))
-# Que Colombia salga primero si quiere Master
-default_pais = paises_disp.index("Colombia") if "Colombia" in paises_disp else 0
-pais_sel = st.selectbox("Pais", paises_disp, index=default_pais)
-ligas_pais = por_pais.get(pais_sel, [])
-opciones = {f"{l['title']}": l for l in ligas_pais}
-liga_sel = st.selectbox(f"Ligas de {pais_sel}", list(opciones.keys()))
-liga_obj = opciones[liga_sel]
+# ---------------------------------------------------------------- análisis
+def quitar_margen(precios):
+    """{resultado: cuota} -> {resultado: probabilidad sin margen de la casa}"""
+    inv = {k: 1 / v for k, v in precios.items() if v and v > 1}
+    total = sum(inv.values())
+    return {k: v / total for k, v in inv.items()} if total else {}
 
-if st.button(f"VER PICK BAGA - {liga_obj['title']}", type="primary", use_container_width=True):
-    partidos_raw, status, rem = get_odds(liga_obj['key'], "h2h", api_key_odds)
-    st.caption(f"Creditos restantes: {rem} | Partidos: {len(partidos_raw)}")
-    if status!=200 or not partidos_raw:
-        st.error("Sin partidos hoy en esta liga")
-        st.stop()
-    tz_local = pytz.timezone('America/Bogota')
-    hoy = []
-    for ev in partidos_raw:
-        dt = datetime.fromisoformat(ev['commence_time'].replace('Z', '+00:00')).astimezone(tz_local)
-        if dt.date()!= datetime.now(tz_local).date(): continue
-        fav = ""; fav_c = 99; cl=ce=cv="?"
-        for bm in ev.get('bookmakers', [])[:1]:
-            for mk in bm.get('markets', []):
-                for out in mk.get('outcomes', []):
-                    if out['name']==ev['home_team']:
-                        cl = out['price']
-                        if out['price'] < fav_c: fav_c = out['price']; fav = ev['home_team']
-                    elif out['name']==ev['away_team']:
-                        cv = out['price']
-                        if out['price'] < fav_c: fav_c = out['price']; fav = ev['away_team']
-                    elif out['name']=='Draw': ce = out['price']
-        hoy.append({'partido': f"{ev['home_team']} vs {ev['away_team']}", 'hora': dt.strftime("%H:%M"), 'local': cl, 'empate': ce, 'visita': cv, 'fav': fav, 'fav_cuota': fav_c, 'id': ev['id'], 'key': liga_obj['key'], 'dt': dt})
 
-    if not hoy:
-        st.warning("No hay partidos hoy en esta liga")
-        st.stop()
-
-    st.success(f"{liga_obj['title']} - {len(hoy)} partidos hoy")
-    for p in sorted(hoy, key=lambda x: x['dt']):
-        hot = "🔥" if p['fav_cuota']<=1.90 else ""
-        st.markdown(f"**{hot} {p['hora']} - {p['partido']}**")
-        c1,c2,c3 = st.columns(3)
-        with c1: st.metric("Local", p['local'])
-        with c2: st.metric("Empate", p['empate'])
-        with c3: st.metric("Visita", p['visita'])
-        st.caption(f"Favorito: {p['fav']} @{p['fav_cuota']}")
-        st.divider()
-
-    hoy.sort(key=lambda x: x['fav_cuota'])
-    mas = hoy[0]
-    st.markdown(f"## 🏆 PICK BAGA DEL DÍA")
-    st.markdown(f"**{mas['partido']} - {mas['hora']}**")
-    totales,_,_ = get_odds(mas['key'], "totals", api_key_odds)
-    btts,_,rem3 = get_odds(mas['key'], "btts", api_key_odds)
-    st.caption(f"Creditos restantes: {rem3}")
-
-    picks=[]
-    for ev in totales+btts:
-        if ev['id']!=mas['id']: continue
-        for bm in ev.get('bookmakers', [])[:1]:
-            for mk in bm.get('markets', []):
-                for out in mk.get('outcomes', []):
-                    price=float(out.get('price',0))
-                    if mk['key']=='totals' and out['name']=='Over' and out.get('point')==1.5 and 1.40<=price<=1.95:
-                        picks.append({'pick': f"Over 1.5 Goles @ {price}", 'cuota': price, 'logica': f"Favorito {mas['fav']} @{mas['fav_cuota']} superior", 'book': bm['title']})
-                    if mk['key']=='btts' and out['name']=='No' and 1.50<=price<=2.10:
-                        picks.append({'pick': f"Ambos NO anotan @ {price}", 'cuota': price, 'logica': "Favorito domina", 'book': bm['title']})
-
-    if picks:
-        mejor = sorted(picks, key=lambda x: abs(x['cuota']-1.70))[0]
-        st.success("PICK MAS LOGICO:")
-        st.markdown(f"### 👉 {mejor['pick']}")
-        st.markdown(f"**Logica:** {mejor['logica']}")
-        if mas['fav_cuota']<=1.85:
-            st.info(f"👉 Extra: Over 8.5 Corners @1.75")
-        st.balloons()
+def analizar_evento(ev, min_casas=4, tz=None):
+    """Compara TODAS las casas (no solo la primera): probabilidad justa, mejor cuota y valor."""
+    libros = {}
+    for b in ev.get("bookmakers", []):
+        for m in b.get("markets", []):
+            if m.get("key") == "h2h":
+                p = {o["name"]: float(o["price"]) for o in m.get("outcomes", []) if o.get("price")}
+                if len(p) >= 2:
+                    libros[b.get("title") or b.get("key")] = (b.get("key"), p)
+    if len(libros) < min_casas:
+        return []
+    nombres = set.intersection(*[set(p) for _, p in libros.values()])
+    if len(nombres) < 2:
+        return []
+    probs = {t: quitar_margen(p) for t, (_, p) in libros.items()}
+    pin = [t for t, (k, _) in libros.items() if k == "pinnacle"]
+    if pin:
+        ref, ref_nombre = {n: probs[pin[0]].get(n, 0) for n in nombres}, "Pinnacle"
     else:
-        st.info(f"Pick: Gana {mas['fav']} @{mas['fav_cuota']}")
+        ref = {n: sum(probs[t].get(n, 0) for t in libros) / len(libros) for n in nombres}
+        ref_nombre = f"consenso de {len(libros)} casas"
+    hora = None
+    if ev.get("commence_time"):
+        hora = datetime.fromisoformat(ev["commence_time"].replace("Z", "+00:00"))
+        hora = hora.astimezone(tz) if tz else hora
+    filas = []
+    for n in sorted(nombres):
+        casa, (_, precios) = max(libros.items(), key=lambda kv: kv[1][1].get(n, 0))
+        mejor, pj = precios[n], ref[n]
+        if pj <= 0:
+            continue
+        filas.append({
+            "hora": hora, "liga": ev.get("sport_title", ""), "local": ev.get("home_team"), "visitante": ev.get("away_team"),
+            "pick": "Empate" if n.lower() == "draw" else f"Gana {n}",
+            "mejor_cuota": round(mejor, 2), "casa": casa,
+            "prob_justa": round(pj, 3), "cuota_justa": round(1 / pj, 2), "valor": round(mejor * pj - 1, 3),
+            "n_casas": len(libros), "referencia": ref_nombre,
+            "dispersion": round(pstdev([probs[t].get(n, 0) for t in libros]), 3),
+        })
+    return filas
 
-st.caption("V24.1 - BetPlay A y B incluidas + Todos los paises")
+
+def a_csv(filas):
+    if not filas:
+        return b""
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=list(filas[0].keys()) + ["consultado"])
+    w.writeheader()
+    ahora = datetime.now(TZ).strftime("%Y-%m-%d %H:%M")
+    for f in filas:
+        w.writerow({**f, "hora": f["hora"].strftime("%Y-%m-%d %H:%M") if f["hora"] else "", "consultado": ahora})
+    return buf.getvalue().encode("utf-8")
+
+
+# ---------------------------------------------------------------- interfaz
+def main():
+    st.set_page_config(page_title="Analizador BAGA", page_icon="⚽", layout="centered")
+    st.title("⚽ Analizador BAGA")
+    st.caption("Datos de The Odds API (no es OddsPortal). Buscar ligas y partidos es GRATIS; solo traer cuotas gasta créditos.")
+
+    try:
+        clave = str(st.secrets.get("ODDS_API_KEY", "")).strip()
+    except Exception:
+        clave = ""
+    clave = clave or st.text_input("Odds API Key:", type="password").strip()
+    if not clave:
+        st.stop()
+
+    try:
+        ligas = ligas_futbol(clave)
+    except Exception as e:
+        st.error(f"No pude leer las ligas (revisa la clave): {e}")
+        st.stop()
+    nombres = dict(ligas)
+
+    dia = st.date_input("Día", value=datetime.now(TZ).date())
+    elegidas = st.multiselect("Ligas", list(nombres), format_func=nombres.get)
+    c1, c2 = st.columns(2)
+    rmin, rmax = c1.slider("Rango de la mejor cuota", 1.01, 10.0, (1.50, 1.70), 0.01)
+    min_casas = c2.number_input("Mínimo de casas", 2, 30, 4)
+    solo_valor = st.checkbox("Solo con valor positivo (mejor cuota > cuota justa)", False)
+
+    if st.button("1️⃣ Buscar partidos del día (gratis)"):
+        hoy = {}
+        for lg in elegidas:
+            try:
+                ev = eventos_dia(clave, lg, dia)
+            except Exception as e:
+                st.warning(f"{nombres.get(lg, lg)}: {e}")
+                continue
+            if ev:
+                hoy[lg] = len(ev)
+        st.session_state["hoy"] = hoy
+        st.session_state.pop("filas", None)
+
+    hoy = st.session_state.get("hoy")
+    if hoy is not None:
+        if not hoy:
+            st.warning("Ninguna de las ligas elegidas tiene partidos ese día. No se gastó ningún crédito.")
+        else:
+            st.info("Partidos encontrados: " + ", ".join(f"{nombres.get(k, k)} ({n})" for k, n in hoy.items()))
+            if st.button(f"2️⃣ Traer cuotas (costará {len(hoy)} créditos)"):
+                filas, uso = [], {}
+                for lg in hoy:
+                    try:
+                        datos, uso = cuotas_liga(clave, lg, dia)
+                    except Exception as e:
+                        st.error(f"{nombres.get(lg, lg)}: {e}")
+                        continue
+                    for ev in datos:
+                        filas += analizar_evento(ev, int(min_casas), TZ)
+                st.session_state["filas"], st.session_state["uso"] = filas, uso
+
+    if "uso" in st.session_state and st.session_state["uso"].get("restantes"):
+        st.metric("Créditos restantes", st.session_state["uso"]["restantes"])
+
+    filas = st.session_state.get("filas")
+    if filas is None:
+        return
+    sel = [f for f in filas if rmin <= f["mejor_cuota"] <= rmax and (not solo_valor or f["valor"] > 0)]
+    orden = st.radio("Ordenar por", ["Hora", "Valor"], horizontal=True)
+    sel.sort(key=lambda f: (f["hora"] or datetime.max.replace(tzinfo=TZ)) if orden == "Hora" else -f["valor"])
+    st.success(f"{len(sel)} picks de {len(filas)} resultados analizados.")
+    for liga in sorted({f["liga"] for f in sel}):
+        with st.expander(f"🏆 {liga}", expanded=True):
+            for f in [x for x in sel if x["liga"] == liga]:
+                h = f["hora"].strftime("%d/%m %H:%M") if f["hora"] else "?"
+                st.markdown(f"**⏰ {h} | {f['local']} vs {f['visitante']}**")
+                st.write(f"📌 {f['pick']} @ **{f['mejor_cuota']}** ({f['casa']}) · cuota justa {f['cuota_justa']} "
+                         f"· valor {f['valor']:+.1%} · {f['n_casas']} casas · ref: {f['referencia']}")
+                st.divider()
+    st.download_button("📥 Descargar picks (CSV)", a_csv(sel), file_name="picks_baga.csv", mime="text/csv")
+    st.caption("Valor positivo = la mejor cuota paga más de lo que implica la probabilidad justa del mercado. "
+               "No garantiza acierto: guarda el CSV y compara con los resultados para saber si funciona.")
+
+
+if __name__ == "__main__":
+    main()
